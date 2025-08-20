@@ -2,6 +2,8 @@ import tiktoken
 import openai
 import logging
 import os
+import re
+import math
 from datetime import datetime
 import time
 import json
@@ -17,7 +19,8 @@ import yaml
 from pathlib import Path
 from types import SimpleNamespace as config
 
-CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
+CHATGPT_API_KEY = os.getenv("LLM_API_KEY")
+CHATGPT_ENDPOINT = os.getenv("LLM_BASE_URL")
 
 
 def count_tokens(text, model):
@@ -27,7 +30,7 @@ def count_tokens(text, model):
 
 def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
-    client = openai.OpenAI(api_key=api_key)
+    client = openai.OpenAI(api_key=api_key, base_url=CHATGPT_ENDPOINT)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -59,7 +62,7 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_
 
 def ChatGPT_API(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
-    client = openai.OpenAI(api_key=api_key)
+    client = openai.OpenAI(api_key=api_key, base_url=CHATGPT_ENDPOINT)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -90,7 +93,7 @@ async def ChatGPT_API_async(model, prompt, api_key=CHATGPT_API_KEY):
     messages = [{"role": "user", "content": prompt}]
     for i in range(max_retries):
         try:
-            async with openai.AsyncOpenAI(api_key=api_key) as client:
+            async with openai.AsyncOpenAI(api_key=api_key, base_url=CHATGPT_ENDPOINT) as client:
                 response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -432,6 +435,14 @@ def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyPDF2"):
             token_length = len(enc.encode(page_text))
             page_list.append((page_text, token_length))
         return page_list
+    elif pdf_parser == "OCR":
+        # For OCR results, expect pdf_path to be the path to OCR JSON file
+        from .ocr_utils import get_page_tokens_from_ocr, load_ocr_results
+        if isinstance(pdf_path, str) and pdf_path.lower().endswith(".json"):
+            ocr_results = load_ocr_results(pdf_path)
+            return get_page_tokens_from_ocr(ocr_results, model)
+        else:
+            raise ValueError("For OCR parser, pdf_path must be a JSON file path")
     else:
         raise ValueError(f"Unsupported PDF parser: {pdf_parser}")
 

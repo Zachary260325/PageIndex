@@ -4,6 +4,7 @@ import copy
 import math
 import random
 import re
+import asyncio
 from .utils import *
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -525,11 +526,95 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
 
     prompt = prompt + '\nGiven text\n:' + part + '\nPrevious tree structure\n:' + json.dumps(toc_content, indent=2)
     response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
+    
     if finish_reason == 'finished':
         return extract_json(response)
-    else:
-        raise Exception(f'finish reason: {finish_reason}')
     
+    # Handle max_output_reached case
+    if_complete = check_if_toc_structure_is_complete(part, response, model)
+    if if_complete == "yes":
+        return extract_json(response)
+    
+    # Continue generation if incomplete
+    last_complete = get_json_content(response)
+    chat_history = [
+        {"role": "user", "content": prompt}, 
+        {"role": "assistant", "content": response},    
+    ]
+    
+    retry_count = 0
+    max_retries = 5
+    
+    while not (if_complete == "yes" and finish_reason == "finished") and retry_count < max_retries:
+        # Clean up incomplete JSON structure
+        position = last_complete.rfind('}')
+        if position != -1:
+            last_complete = last_complete[:position+1] + ']'
+        
+        continue_prompt = """Please continue generating the additional hierarchical tree structure items. Output only the remaining JSON structure items that were not completed in the previous response. Maintain the same format."""
+        
+        new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=continue_prompt, chat_history=chat_history)
+        
+        if new_response.startswith('```json'):
+            new_content = get_json_content(new_response)
+        else:
+            new_content = new_response.strip()
+        
+        # Try to merge the responses
+        try:
+            # Remove the closing bracket from last_complete and opening bracket from new_content
+            if last_complete.endswith(']'):
+                last_complete = last_complete[:-1]
+            if new_content.startswith('['):
+                new_content = new_content[1:]
+            if new_content.endswith(']'):
+                new_content = new_content[:-1]
+            
+            # Combine with comma if needed
+            if last_complete.strip() and new_content.strip():
+                last_complete = last_complete + ',' + new_content + ']'
+            else:
+                last_complete = last_complete + new_content + ']'
+        except:
+            # Fallback: just append
+            last_complete = last_complete + new_content
+        
+        if_complete = check_if_toc_structure_is_complete(part, last_complete, model)
+        
+        # Update chat history for next iteration
+        chat_history = [
+            {"role": "user", "content": continue_prompt},
+            {"role": "assistant", "content": new_response},
+        ]
+        
+        retry_count += 1
+    
+    if retry_count >= max_retries:
+        print(f"Warning: Maximum retries ({max_retries}) reached for generate_toc_continue")
+    
+    return extract_json(last_complete)
+    
+def check_if_toc_structure_is_complete(part, toc_structure, model=None):
+    """
+    Check if the generated TOC structure covers all sections in the given part.
+    """
+    prompt = f"""
+    You are given a document part and a generated table of contents structure.
+    Your job is to check if the generated structure is complete and covers all the main sections in the document part.
+
+    Reply format:
+    {{
+        "thinking": <why do you think the generated structure is complete or not>,
+        "completed": "yes" or "no"
+    }}
+    Directly return the final JSON structure. Do not output anything else."""
+
+    prompt = prompt + '\nDocument part:\n' + part + '\nGenerated structure:\n' + toc_structure
+    response = ChatGPT_API(model=model, prompt=prompt)
+    json_content = extract_json(response)
+    return json_content.get('completed', 'no')
+
+
 ### add verify completeness
 def generate_toc_init(part, model=None):
     print('start generate_toc_init')
@@ -561,9 +646,71 @@ def generate_toc_init(part, model=None):
     response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
 
     if finish_reason == 'finished':
-         return extract_json(response)
-    else:
-        raise Exception(f'finish reason: {finish_reason}')
+        return extract_json(response)
+    
+    # Handle max_output_reached case
+    if_complete = check_if_toc_structure_is_complete(part, response, model)
+    if if_complete == "yes":
+        return extract_json(response)
+    
+    # Continue generation if incomplete
+    last_complete = get_json_content(response)
+    chat_history = [
+        {"role": "user", "content": prompt}, 
+        {"role": "assistant", "content": response},    
+    ]
+    
+    retry_count = 0
+    max_retries = 5
+    
+    while not (if_complete == "yes" and finish_reason == "finished") and retry_count < max_retries:
+        # Clean up incomplete JSON structure
+        position = last_complete.rfind('}')
+        if position != -1:
+            last_complete = last_complete[:position+1] + ']'
+        
+        continue_prompt = """Please continue generating the hierarchical tree structure. Output only the remaining JSON structure items that were not completed in the previous response. Maintain the same format."""
+        
+        new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=continue_prompt, chat_history=chat_history)
+        
+        if new_response.startswith('```json'):
+            new_content = get_json_content(new_response)
+        else:
+            new_content = new_response.strip()
+        
+        # Try to merge the responses
+        try:
+            # Remove the closing bracket from last_complete and opening bracket from new_content
+            if last_complete.endswith(']'):
+                last_complete = last_complete[:-1]
+            if new_content.startswith('['):
+                new_content = new_content[1:]
+            if new_content.endswith(']'):
+                new_content = new_content[:-1]
+            
+            # Combine with comma if needed
+            if last_complete.strip() and new_content.strip():
+                last_complete = last_complete + ',' + new_content + ']'
+            else:
+                last_complete = last_complete + new_content + ']'
+        except:
+            # Fallback: just append
+            last_complete = last_complete + new_content
+        
+        if_complete = check_if_toc_structure_is_complete(part, last_complete, model)
+        
+        # Update chat history for next iteration
+        chat_history = [
+            {"role": "user", "content": continue_prompt},
+            {"role": "assistant", "content": new_response},
+        ]
+        
+        retry_count += 1
+    
+    if retry_count >= max_retries:
+        print(f"Warning: Maximum retries ({max_retries}) reached for generate_toc_init")
+    
+    return extract_json(last_complete)
 
 def process_no_toc(page_list, start_index=1, model=None, logger=None):
     page_contents=[]
@@ -1018,6 +1165,46 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
     
     return node
 
+
+def enhance_structure_with_bbox(structure, ocr_results):
+    """
+    Enhance the structure with bbox information from OCR results.
+    
+    Args:
+        structure: The document structure tree
+        ocr_results: OCR results data
+        
+    Returns:
+        Enhanced structure with bbox information
+    """
+    from .ocr_utils import find_text_bbox_in_page
+    
+    def add_bbox_to_node(node):
+        if isinstance(node, dict):
+            # Try to find bbox for this node's title
+            if 'title' in node and 'start_index' in node:
+                title = node['title']
+                page_index = node['start_index'] - 1  # Convert to 0-based
+                
+                if 0 <= page_index < len(ocr_results):
+                    bbox = find_text_bbox_in_page(ocr_results[page_index], title)
+                    if bbox:
+                        node['bbox'] = bbox
+                        node['page_no'] = ocr_results[page_index].get('page_no', page_index)
+            
+            # Recursively process child nodes
+            if 'nodes' in node and isinstance(node['nodes'], list):
+                for child in node['nodes']:
+                    add_bbox_to_node(child)
+        
+        elif isinstance(node, list):
+            for item in node:
+                add_bbox_to_node(item)
+    
+    add_bbox_to_node(structure)
+    return structure
+
+
 async def tree_parser(page_list, opt, doc=None, logger=None):
     check_toc_result = check_toc(page_list, opt)
     logger.info(check_toc_result)
@@ -1058,21 +1245,41 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
 def page_index_main(doc, opt=None):
     logger = JsonLogger(doc)
     
+    # Support for OCR JSON files
+    is_valid_ocr = isinstance(doc, str) and os.path.isfile(doc) and doc.lower().endswith(".json")
     is_valid_pdf = (
         (isinstance(doc, str) and os.path.isfile(doc) and doc.lower().endswith(".pdf")) or 
         isinstance(doc, BytesIO)
     )
-    if not is_valid_pdf:
-        raise ValueError("Unsupported input type. Expected a PDF file path or BytesIO object.")
+    
+    if not (is_valid_pdf or is_valid_ocr):
+        raise ValueError("Unsupported input type. Expected a PDF file path, OCR JSON file path, or BytesIO object.")
 
-    print('Parsing PDF...')
-    page_list = get_page_tokens(doc)
+    if is_valid_ocr:
+        print('Processing OCR results...')
+        # Load OCR results and create wrapper
+        from .ocr_utils import load_ocr_results, create_ocr_page_list_wrapper, enhance_toc_with_bbox
+        ocr_results = load_ocr_results(doc)
+        page_list = create_ocr_page_list_wrapper(ocr_results)
+        
+        # Store OCR results for later bbox enhancement
+        opt.ocr_results = ocr_results
+        opt.has_ocr_data = True
+    else:
+        print('Parsing PDF...')
+        page_list = get_page_tokens(doc, pdf_parser=getattr(opt, 'pdf_parser', 'PyPDF2'))
+        opt.has_ocr_data = False
 
     logger.info({'total_page_number': len(page_list)})
     logger.info({'total_token': sum([page[1] for page in page_list])})
 
     async def page_index_builder():
         structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
+        
+        # Enhance with bbox information if OCR data is available
+        if opt.has_ocr_data:
+            structure = enhance_structure_with_bbox(structure, opt.ocr_results)
+        
         if opt.if_add_node_id == 'yes':
             write_node_id(structure)    
         if opt.if_add_node_text == 'yes':
@@ -1099,13 +1306,40 @@ def page_index_main(doc, opt=None):
 
 
 def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=None, max_token_num_each_node=None,
-               if_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None, if_add_node_text=None):
+               if_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None, if_add_node_text=None, 
+               pdf_parser=None):
+    """
+    Extract page index structure from document.
     
+    Args:
+        doc: Path to PDF file or OCR JSON file, or BytesIO object
+        model: LLM model to use
+        toc_check_page_num: Number of pages to check for TOC
+        max_page_num_each_node: Maximum pages per node
+        max_token_num_each_node: Maximum tokens per node  
+        if_add_node_id: Whether to add node IDs
+        if_add_node_summary: Whether to add node summaries
+        if_add_doc_description: Whether to add document description
+        if_add_node_text: Whether to add node text
+        pdf_parser: Parser type ("PyPDF2", "PyMuPDF", "OCR")
+    
+    Returns:
+        Dictionary with document structure and metadata
+    """
     user_opt = {
         arg: value for arg, value in locals().items()
         if arg != "doc" and value is not None
     }
     opt = ConfigLoader().load(user_opt)
+    
+    # Auto-detect parser type if not specified
+    if pdf_parser is None:
+        if isinstance(doc, str) and doc.lower().endswith(".json"):
+            pdf_parser = "OCR"
+        else:
+            pdf_parser = "PyPDF2"  # Default
+    
+    opt.pdf_parser = pdf_parser
     return page_index_main(doc, opt)
 
 
